@@ -110,6 +110,41 @@ create policy "Group members can view groups"
 create policy "Authenticated users can create groups"
   on public.groups for insert with check (auth.uid() = created_by);
 
+-- Allow a non-member to look up a group by invite code and join it in one
+-- atomic step. This is SECURITY DEFINER because the RLS "members only"
+-- SELECT policy above would otherwise block the lookup (chicken-and-egg:
+-- you can't see the group until you join, and you can't join until you see it).
+create or replace function public.join_group_by_invite_code(code text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_group_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated' using errcode = '42501';
+  end if;
+
+  select id into target_group_id
+  from public.groups
+  where lower(invite_code) = lower(trim(code));
+
+  if target_group_id is null then
+    raise exception 'Group not found' using errcode = 'P0002';
+  end if;
+
+  insert into public.group_members (group_id, user_id)
+  values (target_group_id, auth.uid())
+  on conflict do nothing;
+
+  return target_group_id;
+end;
+$$;
+
+grant execute on function public.join_group_by_invite_code(text) to authenticated;
+
 -- Group members (readable by any authenticated user -- group-level
 -- security is enforced on the groups table itself)
 create policy "Members can view group members"

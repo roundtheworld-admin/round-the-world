@@ -98,25 +98,38 @@ export function useGroup() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { error: new Error('Not authenticated') };
 
-    const { data: targetGroup } = await supabase
-      .from('groups')
-      .select('*')
-      .eq('invite_code', inviteCode.trim().toLowerCase())
-      .single();
+    // Use a SECURITY DEFINER RPC so the lookup-by-invite-code bypasses
+    // the "members-only SELECT" RLS policy on the groups table (the person
+    // joining is not a member yet, so a plain select would return nothing).
+    const { data: groupId, error: rpcError } = await supabase.rpc(
+      'join_group_by_invite_code',
+      { code: inviteCode.trim() }
+    );
 
-    if (!targetGroup) return { error: new Error('Group not found. Check the invite code.') };
-
-    const { error } = await supabase.from('group_members').insert({
-      group_id: targetGroup.id,
-      user_id: user.id,
-    });
-
-    if (!error) {
-      setGroup(targetGroup);
-      fetchGroup();
+    if (rpcError) {
+      // P0002 = our "Group not found" signal
+      if (rpcError.code === 'P0002' || /group not found/i.test(rpcError.message || '')) {
+        return { error: new Error('Group not found. Check the invite code.') };
+      }
+      return { error: rpcError };
     }
 
-    return { error };
+    if (!groupId) {
+      return { error: new Error('Group not found. Check the invite code.') };
+    }
+
+    // Now that we're a member, the RLS policy permits this read.
+    const { data: newGroup } = await supabase
+      .from('groups')
+      .select('*')
+      .eq('id', groupId)
+      .single();
+
+    if (newGroup) {
+      setGroup(newGroup);
+    }
+    fetchGroup();
+    return { error: null };
   }
 
   // Send a round to one person (status starts as 'pending')
