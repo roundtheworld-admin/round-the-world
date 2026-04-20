@@ -27,6 +27,7 @@ import BuyRoundSheet from '@/components/BuyRoundSheet';
 import SettleUpSheet from '@/components/SettleUpSheet';
 import Avatar from '@/components/Avatar';
 import FirstLoginWizard from '@/components/FirstLoginWizard';
+import PubTutorial from '@/components/PubTutorial';
 import RoundRobinCard from '@/components/RoundRobinCard';
 import SessionRecap from '@/components/SessionRecap';
 import { createClient } from '@/lib/supabase-browser';
@@ -94,34 +95,83 @@ function SecondaryButton({
 // ── Auth Screen ─────────────────────────────────────────────
 
 function AuthScreen() {
-  const { signIn, signUp, resetPassword } = useAuth();
+  const { signIn, signUp, resetPassword, resendConfirmation } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
-  const [mode, setMode] = useState<'auth' | 'forgot'>('auth');
+  const [mode, setMode] = useState<'auth' | 'forgot' | 'awaiting-confirm'>(
+    'auth'
+  );
   const [forgotSent, setForgotSent] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendStatus, setResendStatus] = useState<'' | 'sent' | 'error'>('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Tick down the resend cooldown so we don't spam Supabase (they rate-limit
+  // resend anyway — 60s is a safe floor).
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
 
   const handleSubmit = async () => {
     setError('');
     setLoading(true);
-    const { error } = isSignUp
-      ? await signUp(email, password)
-      : await signIn(email, password);
+    if (isSignUp) {
+      const { error, needsConfirmation } = await signUp(email, password);
+      setLoading(false);
+      if (error) {
+        if (error.message.includes('already registered')) {
+          setError('That email already has an account. Try signing in.');
+        } else if (error.message.includes('least 6')) {
+          setError('Password needs to be at least 6 characters.');
+        } else {
+          setError(error.message);
+        }
+        return;
+      }
+      if (needsConfirmation) {
+        // Park on the "check your email" screen. useAuth's
+        // onAuthStateChange listener will flip `user` truthy once the
+        // confirmation link is clicked and this screen will unmount.
+        setMode('awaiting-confirm');
+        setResendCooldown(60);
+        return;
+      }
+      // No confirmation required -- session is live, Home will route past
+      // AuthScreen on the next render.
+      return;
+    }
+    const { error } = await signIn(email, password);
     setLoading(false);
     if (error) {
       if (error.message.includes('Invalid login credentials')) {
         setError('Wrong email or password. Try again or sign up.');
-      } else if (error.message.includes('already registered')) {
-        setError('That email already has an account. Try signing in.');
       } else if (error.message.includes('least 6')) {
         setError('Password needs to be at least 6 characters.');
       } else if (error.message.toLowerCase().includes('email not confirmed')) {
-        setError('Check your email to confirm your account first.');
+        // They had an account from before but never confirmed it -- offer
+        // them the resend path rather than a dead-end error.
+        setMode('awaiting-confirm');
+        setResendCooldown(0);
       } else {
         setError(error.message);
       }
+    }
+  };
+
+  const handleResend = async () => {
+    if (resendCooldown > 0) return;
+    setResendStatus('');
+    const { error } = await resendConfirmation(email);
+    if (error) {
+      setResendStatus('error');
+      setError(error.message);
+    } else {
+      setResendStatus('sent');
+      setResendCooldown(60);
     }
   };
 
@@ -162,15 +212,17 @@ function AuthScreen() {
       </p>
 
       <div className="w-full max-w-xs space-y-3 relative">
-        <Input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="your@email.com"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && mode === 'forgot') handleForgot();
-          }}
-        />
+        {mode !== 'awaiting-confirm' && (
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="your@email.com"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && mode === 'forgot') handleForgot();
+            }}
+          />
+        )}
 
         {mode === 'auth' && (
           <>
@@ -209,6 +261,39 @@ function AuthScreen() {
               We sent a reset link to {email}. Open it on this device.
             </div>
           </div>
+        )}
+
+        {mode === 'awaiting-confirm' && (
+          <div className="rounded-2xl border border-brand-gold/30 bg-brand-gold/10 p-5 text-center animate-fade-in">
+            <div className="text-3xl mb-2">📬</div>
+            <div className="text-brand-gold text-sm font-semibold mb-1">
+              Confirm your email
+            </div>
+            <div className="text-ink-200 text-[13px] leading-relaxed">
+              We sent a confirmation link to
+              <br />
+              <span className="text-ink-50 font-medium">{email}</span>.
+            </div>
+            <div className="text-ink-400 text-[11px] mt-3 leading-relaxed">
+              Open it on this device and you will land back here signed in.
+            </div>
+            {resendStatus === 'sent' && (
+              <div className="text-brand-green-light text-[11px] mt-3">
+                Resent. Check your inbox again.
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === 'awaiting-confirm' && (
+          <SecondaryButton
+            onClick={handleResend}
+            disabled={resendCooldown > 0}
+          >
+            {resendCooldown > 0
+              ? `Resend email (${resendCooldown}s)`
+              : 'Resend email'}
+          </SecondaryButton>
         )}
 
         {error && (
@@ -252,6 +337,20 @@ function AuthScreen() {
             className="w-full mt-1 text-ink-300 text-xs text-center hover:text-ink-100 transition-colors"
           >
             Back to sign in
+          </button>
+        )}
+
+        {mode === 'awaiting-confirm' && (
+          <button
+            onClick={() => {
+              setError('');
+              setResendStatus('');
+              setMode('auth');
+              setIsSignUp(false);
+            }}
+            className="w-full mt-1 text-ink-300 text-xs text-center hover:text-ink-100 transition-colors"
+          >
+            Use a different email
           </button>
         )}
       </div>
@@ -1005,6 +1104,23 @@ function PubTab({
   const [roundRobin, setRoundRobin] = useState<Awaited<
     ReturnType<typeof getRoundRobin>
   >>(null);
+  const [showPubTutorial, setShowPubTutorial] = useState(false);
+
+  // Gate the one-time Pub Mode tutorial. Only runs client-side so we don't
+  // flash the modal during hydration.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!localStorage.getItem('rtw-pub-tutorial-seen-v1')) {
+      setShowPubTutorial(true);
+    }
+  }, []);
+
+  const handleTutorialDone = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rtw-pub-tutorial-seen-v1', '1');
+    }
+    setShowPubTutorial(false);
+  };
 
   useEffect(() => {
     categorize().then(setCategorized);
@@ -1125,6 +1241,7 @@ function PubTab({
 
   return (
     <>
+      {showPubTutorial && <PubTutorial onDone={handleTutorialDone} />}
       {roundRobin && (
         <RoundRobinCard
           next={roundRobin}

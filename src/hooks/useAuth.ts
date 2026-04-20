@@ -53,8 +53,44 @@ export function useAuth() {
     return { error };
   }
 
-  async function signUp(email: string, password: string): Promise<{ error: AuthError | null }> {
-    const { error } = await supabase.auth.signUp({ email, password });
+  // Returns `needsConfirmation: true` when Supabase created the user but did
+  // NOT return a session (i.e. email confirmation is required). The caller is
+  // expected to park the UI on a "check your email" screen in that case --
+  // useAuth's own onAuthStateChange listener will flip `user` to truthy once
+  // the confirmation link is clicked (localStorage storage events sync the
+  // session across tabs automatically).
+  async function signUp(
+    email: string,
+    password: string
+  ): Promise<{ error: AuthError | null; needsConfirmation: boolean }> {
+    const redirectTo =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/auth/callback`
+        : undefined;
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: redirectTo },
+    });
+    // Supabase returns data.user with data.session === null when email
+    // confirmation is required by project settings.
+    const needsConfirmation = !error && !!data?.user && !data?.session;
+    return { error, needsConfirmation };
+  }
+
+  // Re-send the confirmation email for a pending signup.
+  async function resendConfirmation(
+    email: string
+  ): Promise<{ error: AuthError | null }> {
+    const redirectTo =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/auth/callback`
+        : undefined;
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
     return { error };
   }
 
@@ -100,6 +136,7 @@ export function useAuth() {
     signUp,
     signOut,
     resetPassword,
+    resendConfirmation,
     updatePassword,
     updateProfile,
   };

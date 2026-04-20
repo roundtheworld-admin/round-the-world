@@ -96,6 +96,15 @@ export default function PubSession({
   const [animating, setAnimating] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Track which question IDs we've already put on the deck so we can append
+  // newly-arriving questions (from live prop updates) without rebuilding the
+  // whole thing and nuking the user's scroll position.
+  const seenQuestionIdsRef = useRef<Set<string>>(new Set());
+  // Mirror cards/currentCard into refs so the append effect can peek without
+  // re-running every time state changes.
+  const cardsRef = useRef<Card[]>([]);
+  useEffect(() => { cardsRef.current = cards; }, [cards]);
+
   // Pick a random round theme
   const [roundTheme] = useState(() => ROUND_THEMES[Math.floor(Math.random() * ROUND_THEMES.length)]);
 
@@ -145,8 +154,42 @@ export default function PubSession({
       { type: 'session_end' },
     ]);
 
+    // Seed the seen-ids set so the live-append effect doesn't double-add
+    // questions that were already baked into the initial deck.
+    seenQuestionIdsRef.current = new Set(unanswered.map(q => q.id));
+
     setTimeout(() => setAnimating(false), 2000);
   }, []);
+
+  // Live updates: when new questions arrive via props mid-session (someone
+  // else asked while we're in the pub), splice them in just before the
+  // ask_question card so the user runs into them as they swipe forward.
+  // We deliberately don't rebuild the deck -- that would reset scroll
+  // position and answer-in-progress state.
+  useEffect(() => {
+    if (animating) return;
+    if (cardsRef.current.length === 0) return;
+    const fresh = unanswered.filter(q => !seenQuestionIdsRef.current.has(q.id));
+    if (fresh.length === 0) return;
+    fresh.forEach(q => seenQuestionIdsRef.current.add(q.id));
+
+    const freshCards: Card[] = fresh.map(q => ({ type: 'question' as CardType, data: q }));
+    const insertAt = cardsRef.current.findIndex(c => c.type === 'ask_question');
+
+    if (insertAt === -1) {
+      setCards(prev => [...prev, ...freshCards]);
+      return;
+    }
+    setCards(prev => {
+      const i = prev.findIndex(c => c.type === 'ask_question');
+      if (i === -1) return [...prev, ...freshCards];
+      return [...prev.slice(0, i), ...freshCards, ...prev.slice(i)];
+    });
+    // If the user already reached or passed the insertion point, nudge them
+    // forward so they stay on the card they were on rather than getting
+    // yanked onto a brand new question mid-interaction.
+    setCurrentCard(cc => (cc >= insertAt ? cc + freshCards.length : cc));
+  }, [unanswered, animating]);
 
   // Auto-scroll
   useEffect(() => {
@@ -236,6 +279,11 @@ export default function PubSession({
 
           // ── Intro
           if (card.type === 'intro') {
+            // First session (or a quiet one) has zero reveals and zero waiting
+            // questions -- the old "0 reveals, 0 questions" copy reads like
+            // the app is broken. Warm it up with welcome copy instead, and
+            // only show the counts once there's actually something there.
+            const isFirstTime = completed.length === 0 && unanswered.length === 0;
             return (
               <div key={idx} className="text-center py-5">
                 <div className="rounded-2xl overflow-hidden mb-3">
@@ -244,9 +292,15 @@ export default function PubSession({
                 <p className="text-[13px] text-gray-500">
                   You are at <span className="text-white font-bold">{pubName}</span> in {city}
                 </p>
-                <p className="text-xs text-gray-700 mt-1 px-3 leading-relaxed">
-                  {completed.length} reveal{completed.length !== 1 ? 's' : ''} ready, {unanswered.length} questions, trivia, challenges, and hot takes.
-                </p>
+                {isFirstTime ? (
+                  <p className="text-xs text-gray-500 mt-1.5 px-4 leading-relaxed">
+                    First night in. Kick things off with trivia, a challenge, a hot take, then ask the crew something real.
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-700 mt-1 px-3 leading-relaxed">
+                    {completed.length} reveal{completed.length !== 1 ? 's' : ''} ready, {unanswered.length} question{unanswered.length !== 1 ? 's' : ''}, trivia, challenges, and hot takes.
+                  </p>
+                )}
                 {isActive && (
                   <button onClick={advance} className="mt-3 px-6 py-2.5 rounded-full bg-brand-purple text-white font-bold text-[13px]">
                     Let&apos;s go 🍺
