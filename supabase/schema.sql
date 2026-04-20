@@ -145,6 +145,37 @@ $$;
 
 grant execute on function public.join_group_by_invite_code(text) to authenticated;
 
+-- Let the crew creator rename the crew. Scoped via SECURITY DEFINER so only
+-- the `name` column is ever touched; invite_code, created_by, etc. cannot
+-- be changed by this function.
+create or replace function public.rename_group(group_id uuid, new_name text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated' using errcode = '42501';
+  end if;
+
+  if length(trim(new_name)) = 0 then
+    raise exception 'Name cannot be empty' using errcode = '22023';
+  end if;
+
+  update public.groups
+  set name = trim(new_name)
+  where id = group_id
+    and created_by = auth.uid();
+
+  if not found then
+    raise exception 'Only the crew creator can rename it' using errcode = '42501';
+  end if;
+end;
+$$;
+
+grant execute on function public.rename_group(uuid, text) to authenticated;
+
 -- Group members (readable by any authenticated user -- group-level
 -- security is enforced on the groups table itself)
 create policy "Members can view group members"

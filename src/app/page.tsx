@@ -11,6 +11,8 @@ import {
   Handshake,
   Copy,
   Check,
+  Pencil,
+  X as XIcon,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroup } from '@/hooks/useGroup';
@@ -602,17 +604,53 @@ function CrewTab({
   leaderboard,
   group,
   getDrinkLedger,
+  myUserId,
+  renameGroup,
 }: {
   members: Profile[];
   leaderboard: any[];
   group: any;
   getDrinkLedger: () => Promise<LedgerRow[]>;
+  myUserId: string;
+  renameGroup: (name: string) => Promise<{ error: any }>;
 }) {
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(group?.name || '');
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameSaving, setRenameSaving] = useState(false);
+  const canRename = group?.created_by === myUserId;
 
   useEffect(() => {
     getDrinkLedger().then(setLedger);
   }, [members.length]);
+
+  const handleRenameSave = async () => {
+    setRenameError(null);
+    const next = nameDraft.trim();
+    if (!next) {
+      setRenameError('Give it a name.');
+      return;
+    }
+    if (next === group?.name) {
+      setEditingName(false);
+      return;
+    }
+    setRenameSaving(true);
+    const { error } = await renameGroup(next);
+    setRenameSaving(false);
+    if (error) {
+      setRenameError(error.message || 'Could not rename. Try again.');
+      return;
+    }
+    setEditingName(false);
+  };
+
+  const handleRenameCancel = () => {
+    setNameDraft(group?.name || '');
+    setRenameError(null);
+    setEditingName(false);
+  };
 
   const hasAnyHistory = ledger.some((l) => l.boughtForThem > 0 || l.boughtForMe > 0);
   const AWARDS = [
@@ -654,10 +692,62 @@ function CrewTab({
               </div>
             ))}
           </div>
-          <div className="ml-3">
-            <div className="text-ink-50 font-bold text-[17px] font-display tracking-tight">
-              {group?.name || 'Your Crew'}
-            </div>
+          <div className="ml-3 flex-1 min-w-0">
+            {editingName ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleRenameSave();
+                      if (e.key === 'Escape') handleRenameCancel();
+                    }}
+                    maxLength={40}
+                    className="flex-1 min-w-0 bg-white/[0.06] border border-brand-gold/40 rounded-lg px-2.5 py-1.5 text-ink-50 font-bold text-[15px] outline-none focus:border-brand-gold"
+                    placeholder="Crew name"
+                  />
+                  <button
+                    onClick={handleRenameSave}
+                    disabled={renameSaving}
+                    className="w-8 h-8 rounded-lg bg-brand-gold/20 border border-brand-gold/40 flex items-center justify-center press disabled:opacity-40"
+                    aria-label="Save crew name"
+                  >
+                    <Check size={14} className="text-brand-gold" />
+                  </button>
+                  <button
+                    onClick={handleRenameCancel}
+                    className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/10 flex items-center justify-center press"
+                    aria-label="Cancel rename"
+                  >
+                    <XIcon size={14} className="text-ink-300" />
+                  </button>
+                </div>
+                {renameError && (
+                  <div className="text-brand-coral text-[11px]">{renameError}</div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <div className="text-ink-50 font-bold text-[17px] font-display tracking-tight truncate">
+                  {group?.name || 'Your Crew'}
+                </div>
+                {canRename && (
+                  <button
+                    onClick={() => {
+                      setNameDraft(group?.name || '');
+                      setRenameError(null);
+                      setEditingName(true);
+                    }}
+                    className="p-1 rounded-md hover:bg-white/[0.06] press"
+                    aria-label="Rename crew"
+                  >
+                    <Pencil size={12} className="text-ink-400" />
+                  </button>
+                )}
+              </div>
+            )}
             <div className="text-ink-300 text-xs">
               {members.length} {members.length === 1 ? 'friend' : 'friends'}
             </div>
@@ -1082,6 +1172,7 @@ export default function Home() {
     getRoundRobin,
     getDrinkLedger,
     settleUp,
+    renameGroup,
   } = useGroup();
 
   const { askQuestion } = useQuestions(group?.id ?? null);
@@ -1179,12 +1270,14 @@ export default function Home() {
           onSettleUp={setSettlingWith}
         />
       )}
-      {activeTab === 'crew' && (
+      {activeTab === 'crew' && user && (
         <CrewTab
           members={members}
           leaderboard={leaderboard}
           group={group}
           getDrinkLedger={getDrinkLedger}
+          myUserId={user.id}
+          renameGroup={renameGroup}
         />
       )}
       {activeTab === 'profile' && <ProfileTab />}

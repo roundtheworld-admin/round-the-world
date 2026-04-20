@@ -132,6 +132,25 @@ export function useGroup() {
     return { error: null };
   }
 
+  // Rename the current crew (only the creator is allowed; enforced in the RPC)
+  async function renameGroup(newName: string) {
+    if (!group) return { error: new Error('No group') };
+
+    const trimmed = newName.trim();
+    if (!trimmed) return { error: new Error('Name cannot be empty') };
+
+    const { error } = await supabase.rpc('rename_group', {
+      group_id: group.id,
+      new_name: trimmed,
+    });
+
+    if (!error) {
+      setGroup({ ...group, name: trimmed });
+    }
+
+    return { error };
+  }
+
   // Send a round to one person (status starts as 'pending')
   async function sendRound(toUserId: string, drinkName: string, drinkEmoji: string, amountCents: number, note?: string, checkinId?: string) {
     const { data: { user } } = await supabase.auth.getUser();
@@ -344,7 +363,7 @@ export function useGroup() {
 
   return {
     group, members, leaderboard, loading,
-    createGroup, joinGroup,
+    createGroup, joinGroup, renameGroup,
     sendRound, sendRoundToEveryone, respondToRound, getPendingRounds,
     getRoundRobin, getDrinkLedger, settleUp,
     refresh: fetchGroup,
