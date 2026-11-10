@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit config for Round The World (Next.js 14 App Router + Supabase + Tailwind)
+language: "en-US"
+tone_instructions: "Be direct and practical. This is a small hobby app for four friends: flag real bugs and security issues, skip pedantry."
+
+reviews:
+  profile: "chill"
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/.DS_Store"
+
+  path_instructions:
+    - path: "src/app/auth/**"
+      instructions: >-
+        Auth callback and reset flows. Check that redirects only ever go to our own origin (no open redirects
+        from query params), that failed code exchanges are surfaced to the user rather than silently swallowed,
+        and that nothing sensitive (tokens, emails) is logged.
+    - path: "src/middleware.ts"
+      instructions: >-
+        Session refresh middleware for @supabase/ssr. Check cookie handling stays consistent between request and
+        response, that the matcher does not accidentally skip pages that need a fresh session, and that no
+        expensive work runs on every request.
+    - path: "src/lib/supabase-*.ts"
+      instructions: >-
+        Supabase clients. Only the public anon/publishable key may appear here; flag any service-role key or
+        server-only secret that could reach the browser bundle. Server client must stay server-only.
+    - path: "supabase/**/*.sql"
+      instructions: >-
+        Database schema. Every table must have row level security enabled, and policies must scope reads and
+        writes to members of the same group. Flag any policy that uses `true` for writes, and any change to
+        money columns that stops storing amounts as integer cents.
+    - path: "src/hooks/useTab.ts"
+      instructions: >-
+        Money logic for the running tab. Amounts are integer cents. Check sign conventions (positive = they owe
+        me, negative = I owe them), rounding, validation of user-entered amounts, and that settling cannot flip
+        or overshoot a balance.
+    - path: "src/components/SettleUpSheet.tsx"
+      instructions: >-
+        Money entry UI. Check parsing of typed amounts (NaN, negatives, more than two decimals), that buttons are
+        disabled for invalid amounts, and that the amount shown matches the amount saved.
+    - path: "src/components/BuyRoundSheet.tsx"
+      instructions: >-
+        Money entry UI. Check parsing of typed amounts (NaN, negatives, more than two decimals), that buttons are
+        disabled for invalid amounts, and that the amount shown matches the amount saved.
+    - path: "src/lib/time.ts"
+      instructions: >-
+        Time zone helpers for friends in different countries. Check IANA time zone handling, DST edge cases, and
+        that timestamps are stored and compared in UTC.
+    - path: "src/components/**"
+      instructions: >-
+        Mobile-first React components. Check tap targets are comfortable on a phone, buttons and inputs have
+        accessible labels, and client components do not refetch or re-render more than needed.
+    - path: "seed.mjs"
+      instructions: >-
+        Seed script. Only the public publishable key is acceptable here; flag any secret or service-role key.
+
+  pre_merge_checks:
+    title:
+      mode: "warning"
+      requirements: "Start with an imperative verb; keep it under 60 characters."
+    description:
+      mode: "warning"
+    custom_checks:
+      - name: "Money stays in integer cents"
+        mode: "warning"
+        instructions: >-
+          If this PR touches rounds, settlements, the tab or balances, confirm that every amount is handled and
+          stored as an integer number of cents, that user input is validated before it is saved, and that no
+          floating-point dollar values are written to the database. Pass if the PR does not touch money logic.
+      - name: "RLS on every table"
+        mode: "warning"
+        instructions: >-
+          If this PR adds or changes tables or policies in supabase/*.sql, confirm row level security is enabled
+          on every table and that policies limit access to members of the same group. Pass if no SQL changed.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: "auto"  
